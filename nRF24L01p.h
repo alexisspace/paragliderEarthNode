@@ -28,3 +28,6 @@
 #define W_ACK_PAYLOAD   0b10101000
 #define W_TX_PAYLOAD_NOACK 0b10110000
 #define NOP          0b11111111
+
+// Pin assigments
+#define CSN_PIN LATBbits.LATB10

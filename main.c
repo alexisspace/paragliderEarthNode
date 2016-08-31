@@ -14,13 +14,13 @@
 
 // Constantes de la implementacion
 #define DEG2RAD				17.4533e-003
-#define USART_TX_BUFFER_SIZE	11
-#define SPI_BUFFER_SIZE	11
+#define USART_TX_BUFFER_SIZE	10
+#define SPI_BUFFER_SIZE	10
 #define BYTES_TO_READ 10
 
 // Variables globales
 char SPI_buffer[SPI_BUFFER_SIZE], U1TX_buffer[USART_TX_BUFFER_SIZE], *SPI_buffer_ptr;
-unsigned char cmd, U1TX_byte_counter;
+unsigned char sys_cmd, U1TX_byte_counter;
 unsigned char SPI_byte_counter, SPI_max_bytes;
 
 typedef struct status {
@@ -41,7 +41,7 @@ void startRF_TXRX(void);
 
 int main(void)
 {
-   unsigned char cmd, sys_cmd, addr, n_bytes, k; 
+   unsigned char cmd, addr, n_bytes, k; 
 	unsigned int config1, config2, config3;
 
 // Configure Oscillator to operate the device at 40Mhz
@@ -58,16 +58,25 @@ int main(void)
 	while(OSCCONbits.LOCK!=1) {};
 
 // Configurar pines
-	RPINR18 = 9;			// Make Pin RP9 U1RX
+   // Desbloquear registros
+   //__builtin_write_OSCCONL(0x46); // unlock sequence - step 1
+   //__builtin_write_OSCCONH(0x57); // unlock sequence - step 2
+   //_IOLOCK = 0;   // Unlock
+	RPINR18bits.U1RXR = 9;			// Make Pin RP9 U1RX
 	RPOR4bits.RP8R = 3;		// Make Pin RP8 U1TX
-	RPINR20 = 0x01;          // SDI assigned to RP1
+	RPINR20bits.SDI1R = 0x01;          // SDI assigned to RP1
 	RPOR1bits.RP2R = 0X07;  // SDO assigned to RP2
-	RPOR1bits.RP3R = 0X08;  // SCK assigned to RP3            
-	AD1PCFGL = 0x03C0;		// Make analog pins digital
+	RPOR1bits.RP3R = 0X08;  // SCK assigned to RP3
+	// Volver a bloquear registros
+   //__builtin_write_OSCCONL(0x46); // unlock sequence - step 1
+   //__builtin_write_OSCCONH(0x57); // unlock sequence - step 2
+   //_IOLOCK = 1; // re-lock the ports	
+	
+	AD1PCFGL = 0xFFFF;		// Make analog pins digital
 	// Config LED's as output and U1RX as Input; RB10 is SS (slave select);
 	// RB11 is nRF24L01+ CE (Chip enable, activates RX or TX mode)
-	TRISB = 0x029F;
-	LATB = 0xF000;
+	TRISB = 0x0293;
+	LATB = 0xFC0F;
 	
 // Configurar UART
 	U1BRG  = BRGVAL;
@@ -91,7 +100,7 @@ int main(void)
 	PR1 = 0x78E4;//0x3C72;			// interrupt every 100ms
 	T1CON = 0x8030;			// 1:256 prescale, start TMR1
 	IFS0bits.T1IF = 0;		// clr interrupt flag
-//	IEC0bits.T1IE = 1;		// set interrupt enable bit
+	IEC0bits.T1IE = 1;		// set interrupt enable bit
 
 // Configurar SPI
 // PRI_PRESCAL_1_1 & SEC_PRESCAL_6_1 for ~6 MHz
@@ -101,24 +110,19 @@ int main(void)
    CLK_POL_ACTIVE_HIGH & MASTER_ENABLE_ON & SEC_PRESCAL_6_1 & PRI_PRESCAL_1_1;
    
    config2 = 0x0000;
-   config2 = FRAME_ENABLE_OFF & FRAME_SYNC_OUTPUT & FRAME_POL_ACTIVE_LOW &
-   FRAME_SYNC_EDGE_COINCIDE;
+   config2 = FRAME_ENABLE_OFF;
    
    config3 = 0x0000;
    config3 = SPI_ENABLE & SPI_IDLE_CON & SPI_RX_OVFLOW_CLR;
    
    OpenSPI1(config1, config2, config3);
    ConfigIntSPI1(SPI_INT_PRI_3 & SPI_INT_EN);   // Enable interrupt
-   LATBbits.LATB2 = 0x01;  // SS idle
+   
+   CSN_PIN = 0x01;  // SS idle
 
 
-// Activar LED que indica entrada en el lazo principal del programa
-	LATBbits.LATB13 = 0x00;		// On LED (D6)
 	while(1)
 	{
-      if(UART_status.data != 0 && UART_status.status == 0){
-         sys_cmd = UART_status.data;
-      }
 		
 		switch(sys_cmd){
    		case 'p': // Read the first 10 nRF24L01+ (8 bit) registers  		   
@@ -132,17 +136,18 @@ int main(void)
    		      addr++; // Increment register address
             }
             sys_cmd = 0; // Reset the command as is already executed
+            LATBbits.LATB14 = !LATBbits.LATB14; // Toggle LED (D5)
    		break;
-   		case 'q': // Read one nRF24L01+ (5 bit) registers
+   		case 'q': // Read one nRF24L01+ (5 byte) registers
    		   cmd = R_REGISTER; // nRF24L01+ command
-   		   addr = RX_ADDR_P0;
+   		   addr = RX_ADDR_P0; // RX_ADDR_P0: RX address Pipe 0
    		   n_bytes = 5;
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
    		   SPI_ReadAddr(cmd, addr, SPI_buffer, n_bytes);
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
    		case 'r': // Read usign an specific address read command
-   		   cmd = R_RX_PL_WID; // nRF24L01+ command
+   		   cmd = R_RX_PL_WID; // nRF24L01+ command, R_RX_PL_WID: Read Payload Width
    		   addr = 0x00;   // No address with this command
    		   n_bytes = 1;
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
@@ -153,6 +158,7 @@ int main(void)
 		
 		// Despues de recibir los datos del nRF24L01+ enviarlos a la PC
 		if(SPI_status.status == 0 && UART_status.data != 0 && UART_status.status == 0 && sys_cmd == 0){
+   		LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
    		UARTbufferSend(SPI_buffer);
 		}
 		
@@ -172,8 +178,7 @@ char UARTbufferSend(char* c_ptr)
    // Check if UART is not already transmiting
    if(UART_status.status == 0){
       UART_status.status = 1; // Update to transmiting status
-	   memcpy(U1TX_buffer, c_ptr, USART_TX_BUFFER_SIZE-1);
-	   U1TX_buffer[USART_TX_BUFFER_SIZE-1] = 0xFF;
+	   memcpy(U1TX_buffer, c_ptr, USART_TX_BUFFER_SIZE);
 
 	   // Iniciar transmision de mensaje por el UART
 	   U1TX_byte_counter = 1;		// Inicializar valor de contador
@@ -186,10 +191,11 @@ char UARTbufferSend(char* c_ptr)
 	}
 }
 
-// commands that writes specific locations: W_TX_PAYLOAD, W_TX_PAYLOAD_NOACK (addr = 0x00)
-// commands that writes variable locations: W_REGISTER, W_ACK_PAYLOAD
+// commands that writes specific memory locations: W_TX_PAYLOAD, W_TX_PAYLOAD_NOACK (addr = 0x00)
+// commands that writes variable memory locations: W_REGISTER, W_ACK_PAYLOAD
 char SPI_WriteAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned char n_data)
 {
+   // NOTA:UNIR ESTA FUNCION CON SPI_ReadAddr, YA QUE SON PARECIDAS Y SE DUPLICA EL CODIGO
    // status: 0: Idle; 1: Sending; 2: Receiving
    if(SPI_status.status == 0){
       SPI_max_bytes = n_data;
@@ -197,7 +203,7 @@ char SPI_WriteAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned
       SPI_byte_counter = 0;
       SPI_status.status = 1; // Set the sending status
       // Assert Chip select  pin
-      LATBbits.LATB10 = 0x00;  //
+      CSN_PIN = 0x00;  //
       WriteSPI1(cmd | addr); // The first byte is the command byte
    }else{
       return 0; // Transaction in process
@@ -212,9 +218,9 @@ char SPI_ReadAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned 
       SPI_max_bytes = n_data;
       SPI_buffer_ptr = d_ptr;
       SPI_byte_counter = 0;
-      SPI_status.status = 2; // Set the sending status
-      // Assert Chip select  pin
-      LATBbits.LATB10 = 0x00;  //
+      SPI_status.status = 2; // Set the receiving status
+      // Assert Chip Select  pin
+      CSN_PIN = 0x00;  //
       WriteSPI1(cmd | addr); // The first byte is the command byte
    }else{
       return 0; // Error: Transaction in process
@@ -262,7 +268,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
 	IFS0bits.U1TXIF = 0;	// Limpiar bandera de interrupcion
 	if(U1TX_byte_counter < USART_TX_BUFFER_SIZE)
 	{
-		LATBbits.LATB12 = !LATBbits.LATB12;		// On LED (D7) (inverted)
+		LATBbits.LATB13 = !LATBbits.LATB13;		// Toggle LED (D6) 
 		U1TXREG = U1TX_buffer[U1TX_byte_counter];
 		U1TX_byte_counter++;
 	}
@@ -280,7 +286,9 @@ void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _U1RXInterrupt(void)
 {
    _U1RXIF = 0;					// Clear UART RX Interrupt Flag
+	LATBbits.LATB12 = !LATBbits.LATB12;		// Toggle LED (D7)
    UART_status.data = U1RXREG;
+   sys_cmd = UART_status.data;
 }
 
 void __attribute__((__interrupt__, no_auto_psv)) _SPI1ErrInterrupt (void)
@@ -305,7 +313,7 @@ void __attribute__((__interrupt__, auto_psv)) _SPI1Interrupt (void)
          SPI_byte_counter++;
          if(SPI_byte_counter == SPI_max_bytes){
             SPI_status.status = 0;  // Transmision complete, return to idle
-            LATBbits.LATB10 = 0x01;  // SS pin, release slave
+            CSN_PIN = 0x01;  // SS pin, release slave
          }
          break;
       case 2: // Receiving
@@ -319,7 +327,7 @@ void __attribute__((__interrupt__, auto_psv)) _SPI1Interrupt (void)
          SPI_byte_counter++;
          if(SPI_byte_counter > SPI_max_bytes){
             SPI_status.status = 0;  // Transmision complete, return to idle
-            LATBbits.LATB10 = 0x01;  // SS pin, release slave
+            CSN_PIN = 0x01;  // SS pin, release slave
          }else{
             WriteSPI1(0x00); // Dummy write for clocking the incoming byte
          }
