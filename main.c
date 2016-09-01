@@ -33,11 +33,8 @@ volatile struct status UART_status = {0,0};
 volatile struct status SPI_status = {0,0}; // Estado del SPI
 volatile struct status SYS_status = {0,0}; // Estado del sistema
 
-// Prototipos de funciones
+// Private function prototypes
 char UARTbufferSend(char* c_ptr);
-char SPI_WriteAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned char n_data);
-char SPI_ReadAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned char n_data);
-void startRF_TXRX(void);
 
 int main(void)
 {
@@ -132,7 +129,7 @@ int main(void)
    		   n_bytes = 1;
    		   for(k = 0; k < BYTES_TO_READ; k++){
       		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   		      SPI_ReadAddr(cmd, addr, &SPI_buffer[k], n_bytes);
+   		      SPI_ReadWriteAddr(cmd, addr, &SPI_buffer[k], n_bytes, SPI_READ);
    		      addr++; // Increment register address
             }
             sys_cmd = 0; // Reset the command as is already executed
@@ -143,7 +140,7 @@ int main(void)
    		   addr = RX_ADDR_P0; // RX_ADDR_P0: RX address Pipe 0
    		   n_bytes = 5;
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   		   SPI_ReadAddr(cmd, addr, SPI_buffer, n_bytes);
+   		   SPI_ReadWriteAddr(cmd, addr, SPI_buffer, n_bytes, SPI_READ);
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
    		case 'r': // Read usign an specific address read command
@@ -151,14 +148,18 @@ int main(void)
    		   addr = 0x00;   // No address with this command
    		   n_bytes = 1;
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   		   SPI_ReadAddr(cmd, addr, SPI_buffer, n_bytes);   	
-   		   sys_cmd = 0; // Reset the command as is already executed	   
+   		   SPI_ReadWriteAddr(cmd, addr, SPI_buffer, n_bytes, SPI_READ);   	
+   		   sys_cmd = 0; // Reset the command as is already executed
+   		break;
+   		case 's':
+   		   nRF24L01p_PTX_config();
+   		   sys_cmd = 0; // Reset the command as is already executed
    		break;
 		}
 		
 		// Despues de recibir los datos del nRF24L01+ enviarlos a la PC
 		if(SPI_status.status == 0 && UART_status.data != 0 && UART_status.status == 0 && sys_cmd == 0){
-   		LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
+   		//LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
    		UARTbufferSend(SPI_buffer);
 		}
 		
@@ -193,32 +194,21 @@ char UARTbufferSend(char* c_ptr)
 
 // commands that writes specific memory locations: W_TX_PAYLOAD, W_TX_PAYLOAD_NOACK (addr = 0x00)
 // commands that writes variable memory locations: W_REGISTER, W_ACK_PAYLOAD
-char SPI_WriteAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned char n_data)
-{
-   // NOTA:UNIR ESTA FUNCION CON SPI_ReadAddr, YA QUE SON PARECIDAS Y SE DUPLICA EL CODIGO
-   // status: 0: Idle; 1: Sending; 2: Receiving
-   if(SPI_status.status == 0){
-      SPI_max_bytes = n_data;
-      SPI_buffer_ptr = d_ptr;
-      SPI_byte_counter = 0;
-      SPI_status.status = 1; // Set the sending status
-      // Assert Chip select  pin
-      CSN_PIN = 0x00;  //
-      WriteSPI1(cmd | addr); // The first byte is the command byte
-   }else{
-      return 0; // Transaction in process
-   }
-}
 // commands that reads specific locations: R_RX_PAYLOAD, R_RX_PL_WID (addr = 0x00)
 // commands that reads variable locations: R_REGISTER
-char SPI_ReadAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned char n_data)
+char SPI_ReadWriteAddr(unsigned char cmd, unsigned char addr,
+    char * d_ptr, unsigned char n_data, unsigned char rw)
 {
    // status: 0: Idle; 1: Sending; 2: Receiving
    if(SPI_status.status == 0){
       SPI_max_bytes = n_data;
       SPI_buffer_ptr = d_ptr;
       SPI_byte_counter = 0;
-      SPI_status.status = 2; // Set the receiving status
+      if(rw == SPI_WRITE){
+         SPI_status.status = 1; // Set sending status
+      }else{
+         SPI_status.status = 2; // Set receiving status
+      }
       // Assert Chip Select  pin
       CSN_PIN = 0x00;  //
       WriteSPI1(cmd | addr); // The first byte is the command byte
@@ -227,21 +217,14 @@ char SPI_ReadAddr(unsigned char cmd, unsigned char addr, char * d_ptr, unsigned 
    }
 }
 
-void startRF_TXRX(void)
-{
-   LATBbits.LATB11 = 0x01;  // Assert the CE pin on nRF24L01+
-   IEC0bits.INT0IE = 1;		// Habilitar interrupcion externa
-}
+
 /**************************************************************************/
 // Vectores de interrupcion
 /**************************************************************************/
 void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 {
-
 	IFS0bits.T1IF = 0;	// clear interrupt flag	
-	LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
-	
-
+	D4_PIN = !D4_PIN;		//Toggle LED (D4)
 }
 
 void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
@@ -309,11 +292,12 @@ void __attribute__((__interrupt__, auto_psv)) _SPI1Interrupt (void)
             SPI_status.data = ReadSPI1();
          }
          ReadSPI1(); // Discard the received byte while transmiting
-         WriteSPI1(SPI_buffer_ptr[SPI_byte_counter] & 0x00ff);
-         SPI_byte_counter++;
          if(SPI_byte_counter == SPI_max_bytes){
             SPI_status.status = 0;  // Transmision complete, return to idle
             CSN_PIN = 0x01;  // SS pin, release slave
+         }else{
+            WriteSPI1(SPI_buffer_ptr[SPI_byte_counter] & 0x00ff);
+            SPI_byte_counter++;
          }
          break;
       case 2: // Receiving
