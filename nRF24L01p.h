@@ -31,8 +31,6 @@ typedef struct status {
 #define FEATURE      0x1D
 #define FIFO_STATUS  0x17
 
-
-
 // Commands
 #define R_REGISTER   0x00
 #define W_REGISTER   0x20
@@ -64,7 +62,7 @@ typedef struct status {
 
 // Public function prototypes
 void nRF24L01p_PTX_config(void);
-void nRF24L01p_PRX_config(void)
+void nRF24L01p_PRX_config(void);
 void nRF24L01p_PowerUp(void);
 void startRF_TXRX(void);
 char SPI_ReadWriteAddr(unsigned char cmd, unsigned char addr,

@@ -15,7 +15,7 @@
 #define BRGVAL          ((FCY/BAUDRATE)/16)-1 
 
 // Constantes de la implementacion
-#define DEG2RAD				17.4533e-003
+#define DEG2RAD	17.4533e-003
 #define USART_TX_BUFFER_SIZE 10
 #define SPI_BUFFER_SIZE	10
 #define BYTES_TO_READ 10
@@ -26,7 +26,7 @@ unsigned char sys_cmd, U1TX_byte_counter, n;
 unsigned char SPI_byte_counter, SPI_max_bytes;
 
 
-volatile struct status UART_status = {0,0};
+volatile struct status UART_status = {0,0};// Estado del UART
 volatile struct status SPI_status = {0,0}; // Estado del SPI
 volatile struct status SYS_status = {0,0}; // Estado del sistema
 
@@ -97,6 +97,7 @@ int main(void)
 	IFS0bits.T1IF = 0;		// clr interrupt flag
 	IEC0bits.T1IE = 1;		// set interrupt enable bit
 */	
+
 	OpenTimer1(T1_ON & T1_IDLE_CON & T1_GATE_OFF & T1_PS_1_256 &
 	   T1_SYNC_EXT_OFF & T1_SOURCE_INT, 0x78E4);
    ConfigIntTimer1(T1_INT_ON);
@@ -135,14 +136,11 @@ int main(void)
    		      addr++; // Increment register address
             }
             sys_cmd = 0; // Reset the command as is already executed
-            LATBbits.LATB14 = !LATBbits.LATB14; // Toggle LED (D5)
    		break;
    		case 'q': // Read one nRF24L01+ (5 byte) registers
-   		   cmd = R_REGISTER; // nRF24L01+ command
-   		   addr = RX_ADDR_P0; // RX_ADDR_P0: RX address Pipe 0
    		   n_bytes = 5;
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   		   SPI_ReadWriteAddr(cmd, addr, SPI_buffer, n_bytes, SPI_READ);
+   		   SPI_ReadWriteAddr(R_REGISTER, RX_ADDR_P0, SPI_buffer, n_bytes, SPI_READ);
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
    		case 'r': // Read usign an specific address read command
@@ -244,7 +242,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 	// Manejo de la interrupcion externa: RB7, PIN16
 	// nRF24L01+ has sended an interruption request, check if data is received from
 	// air node
-	
+
 	unsigned char n_payload;
 	
    while(SPI_status.status != 0 ); // Wait for SPI to be idle
@@ -258,13 +256,18 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
       //The RX_DR IRQ is asserted by a new packet arrival event. 
       //The procedure for handling this interrupt should be: 
       //1) read payload through SPI, 
+      // Read payload width
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	SPI_ReadWriteAddr(R_RX_PL_WID, 0x00, SPI_buffer, 0x01, SPI_READ); // Read payload width
-   	n_payload = SPI_buffer[0]; // Save payload width
+   	SPI_ReadWriteAddr(R_RX_PL_WID, 0x00, SPI_buffer, 0x01, SPI_READ); 
+
+   	// Read actual payload data
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   	n_payload = SPI_buffer[0]; // Save payload width      
+   	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_payload, SPI_READ); 
    	
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_payload, SPI_READ); // Read actual payload data
-   	// Enviar datos por el puerto serial a la PC
+   	// Send data to PC
+   	while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   	UARTbufferSend(SPI_buffer);
    	   	      
       //2) clear RX_DR IRQ,
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
@@ -275,12 +278,12 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
    	SPI_ReadWriteAddr(R_REGISTER, FIFO_STATUS, SPI_buffer, 0x01, SPI_READ); // Read actual payload data      
    	
-      //4) if there are more data in RX FIFO, repeat from step 1).
-      
+      //4) if there are more data in RX FIFO, repeat from step 1).      
    }
    
    // Data Sent TX FIFO interrupt. Asserted when packet transmitted on TX. 
    if(n & 0x02){
+      D5_PIN = !D5_PIN; // Toggle LED 5
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
       SPI_buffer[0] = 0x20;   // Write STATUS_REG to clear interrupt sources
    	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
@@ -292,7 +295,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
       SPI_buffer[0] = 0x10;   // Write STATUS_REG to clear interrupt sources
    	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
    }
-   
    
 	IFS0bits.INT0IF = 0;		// Clear flag
 }
