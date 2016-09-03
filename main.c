@@ -4,7 +4,9 @@
 #include <dsp.h>
 #include <string.h>
 #include <spi.h>
+#include <timer.h>
 #include "nRF24L01p.h"
+
 
 
 //#define XTFREQ          7370000         //FRC frequency 
@@ -14,20 +16,15 @@
 
 // Constantes de la implementacion
 #define DEG2RAD				17.4533e-003
-#define USART_TX_BUFFER_SIZE	10
+#define USART_TX_BUFFER_SIZE 10
 #define SPI_BUFFER_SIZE	10
 #define BYTES_TO_READ 10
 
 // Variables globales
 char SPI_buffer[SPI_BUFFER_SIZE], U1TX_buffer[USART_TX_BUFFER_SIZE], *SPI_buffer_ptr;
-unsigned char sys_cmd, U1TX_byte_counter;
+unsigned char sys_cmd, U1TX_byte_counter, n;
 unsigned char SPI_byte_counter, SPI_max_bytes;
 
-typedef struct status {
-   char status;
-   char data;
-   }; // Se define el tipo "struct status"
-//typedef struct status STATUS; // Se abrevia STATUS
 
 volatile struct status UART_status = {0,0};
 volatile struct status SPI_status = {0,0}; // Estado del SPI
@@ -93,11 +90,16 @@ int main(void)
 	//	IEC0bits.INT0IE = 1;		// Habilitar interrupcion
 
 // Configuar Timer1. Habilitar interrupcion
+/*
 	TMR1 = 0;				// clear timer 1
-	PR1 = 0x78E4;//0x3C72;			// interrupt every 100ms
+	PR1 = 0x78E4;			// interrupt every (100ms: 0x3C72) 
 	T1CON = 0x8030;			// 1:256 prescale, start TMR1
 	IFS0bits.T1IF = 0;		// clr interrupt flag
 	IEC0bits.T1IE = 1;		// set interrupt enable bit
+*/	
+	OpenTimer1(T1_ON & T1_IDLE_CON & T1_GATE_OFF & T1_PS_1_256 &
+	   T1_SYNC_EXT_OFF & T1_SOURCE_INT, 0x78E4);
+   ConfigIntTimer1(T1_INT_ON);
 
 // Configurar SPI
 // PRI_PRESCAL_1_1 & SEC_PRESCAL_6_1 for ~6 MHz
@@ -152,7 +154,17 @@ int main(void)
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
    		case 's':
-   		   nRF24L01p_PTX_config();
+   		   // Config some register and power up the nRF24L01+
+   		   nRF24L01p_PowerUp();
+   		   sys_cmd = 0; // Reset the command as is already executed
+   		break;
+   		case 't':
+   		   // Send command to the air node to request for GPS data.
+   		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   		   SPI_buffer[0] = GET_GPS_DATA;
+   		   SPI_ReadWriteAddr(W_TX_PAYLOAD, 0x00, SPI_buffer, 0x01, SPI_READ);
+   		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   		   startRF_TXRX();   // Initiate RF transmission
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
 		}
@@ -230,16 +242,58 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 {
 	// Manejo de la interrupcion externa: RB7, PIN16
-	// nRF24L01+ has sended an interruption request
+	// nRF24L01+ has sended an interruption request, check if data is received from
+	// air node
 	
-	LATBbits.LATB11 = 0x00; // CE pin. desactivar la transmisión de datos del nRF24L01+
+	unsigned char n_payload;
 	
-   // Leer el registro STATUS para verificar la fuente de interrupcion
+   while(SPI_status.status != 0 ); // Wait for SPI to be idle
+	SPI_ReadWriteAddr(R_REGISTER, CONFIG, SPI_buffer, 0x01, SPI_READ);
    
-   // Escribir el registro STATUS para terminar la condicion de interrupcion
-
-
-	LATBbits.LATB14 = !LATBbits.LATB14;		// On LED5 (D5) (inverted)
+   // Guardar el registro STATUS para verificar la fuente de interrupcion
+   n = SPI_status.data>>4; // Take the relevant bits only
+   
+   // Data ready RX FIFO. Asserted when new data arrives RX FIFO   
+   if(n & 0x04){
+      //The RX_DR IRQ is asserted by a new packet arrival event. 
+      //The procedure for handling this interrupt should be: 
+      //1) read payload through SPI, 
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   	SPI_ReadWriteAddr(R_RX_PL_WID, 0x00, SPI_buffer, 0x01, SPI_READ); // Read payload width
+   	n_payload = SPI_buffer[0]; // Save payload width
+   	
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_payload, SPI_READ); // Read actual payload data
+   	// Enviar datos por el puerto serial a la PC
+   	   	      
+      //2) clear RX_DR IRQ,
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+      SPI_buffer[0] = 0x40;   // Write STATUS_REG to clear interrupt sources
+   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);
+   	       
+      //3) read FIFO_STATUS to check if there are more payloads available in RX FIFO, 
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   	SPI_ReadWriteAddr(R_REGISTER, FIFO_STATUS, SPI_buffer, 0x01, SPI_READ); // Read actual payload data      
+   	
+      //4) if there are more data in RX FIFO, repeat from step 1).
+      
+   }
+   
+   // Data Sent TX FIFO interrupt. Asserted when packet transmitted on TX. 
+   if(n & 0x02){
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+      SPI_buffer[0] = 0x20;   // Write STATUS_REG to clear interrupt sources
+   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
+   }
+   
+   // Maximum number of TX retransmits interrupt
+   if(n & 0x01){
+      while(SPI_status.status != 0 ); // Wait for SPI to be idle
+      SPI_buffer[0] = 0x10;   // Write STATUS_REG to clear interrupt sources
+   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
+   }
+   
+   
 	IFS0bits.INT0IF = 0;		// Clear flag
 }
 
@@ -296,7 +350,7 @@ void __attribute__((__interrupt__, auto_psv)) _SPI1Interrupt (void)
             SPI_status.status = 0;  // Transmision complete, return to idle
             CSN_PIN = 0x01;  // SS pin, release slave
          }else{
-            WriteSPI1(SPI_buffer_ptr[SPI_byte_counter] & 0x00ff);
+            WriteSPI1(SPI_buffer_ptr[SPI_byte_counter]);
             SPI_byte_counter++;
          }
          break;
