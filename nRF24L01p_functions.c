@@ -16,7 +16,7 @@ void nRF24L01p_PTX_config(void)
 
 void nRF24L01p_PRX_config(void)
 {
-   // CONFIG: PRIM_RX bit set HIGH
+   // CONFIG: PRIM_RX bit set HIGH 
    while(SPI_status.status != 0 ); // Wait for SPI to be idle
    SPI_buffer[0] = 0b00001011;   
    SPI_ReadWriteAddr(W_REGISTER, CONFIG, SPI_buffer, 0x01, SPI_WRITE);   
