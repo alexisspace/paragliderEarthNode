@@ -14,13 +14,13 @@
 #define BAUDRATE         9600		      
 #define BRGVAL          ((FCY/BAUDRATE)/16)-1 
 
-// Constantes de la implementacion
+// Constants
 #define DEG2RAD	17.4533e-003
 #define USART_TX_BUFFER_SIZE 10
 #define SPI_BUFFER_SIZE	10
 #define BYTES_TO_READ 10
 
-// Variables globales
+// Global variables 
 char SPI_buffer[SPI_BUFFER_SIZE], U1TX_buffer[USART_TX_BUFFER_SIZE], *SPI_buffer_ptr;
 unsigned char sys_cmd, U1TX_byte_counter, n;
 unsigned char SPI_byte_counter, SPI_max_bytes;
@@ -52,7 +52,7 @@ int main(void)
 	while(OSCCONbits.LOCK!=1) {};
 
 // Configurar pines
-   // Desbloquear registros
+   // Unlock registers
    //__builtin_write_OSCCONL(0x46); // unlock sequence - step 1
    //__builtin_write_OSCCONH(0x57); // unlock sequence - step 2
    //_IOLOCK = 0;   // Unlock
@@ -61,7 +61,7 @@ int main(void)
 	RPINR20bits.SDI1R = 0x01;          // SDI assigned to RP1
 	RPOR1bits.RP2R = 0X07;  // SDO assigned to RP2
 	RPOR1bits.RP3R = 0X08;  // SCK assigned to RP3
-	// Volver a bloquear registros
+	// Block registers
    //__builtin_write_OSCCONL(0x46); // unlock sequence - step 1
    //__builtin_write_OSCCONH(0x57); // unlock sequence - step 2
    //_IOLOCK = 1; // re-lock the ports	
@@ -72,7 +72,7 @@ int main(void)
 	TRISB = 0x0293;
 	LATB = 0xFC0F;
 	
-// Configurar UART
+// Config UART
 	U1BRG  = BRGVAL;
 	U1MODE = 0x8000; /* Reset UART to 8-n-1, alt pins, and enable */
 	U1STA  = 0x0440; /* Reset status register and enable TX & RX*/
@@ -83,26 +83,20 @@ int main(void)
 	IEC0bits.U1TXIE = 0; // Disable UART TX interrupt
 	IEC0bits.U1RXIE = 1; // Enable RX interrupt
 
-// Configurar interrupcion externa INT0 (RB7, PIN16)
+// Config extern interruption INT0 (RB7, PIN16)
 	INTCON2bits.INT0EP = 1;		// Interrupcion en 0:flanco ascendente 1: flanco descendente
 	IFS0bits.INT0IF = 0;		// Clear flag
 	CNPU2bits.CN23PUE = 0;	// pull-up on RB7: 0 = Disable; 1 = Enable
-	//	IEC0bits.INT0IE = 1;		// Habilitar interrupcion
+	IEC0bits.INT0IE = 1;		// Habilitar interrupcion
 
-// Configuar Timer1. Habilitar interrupcion
-/*
-	TMR1 = 0;				// clear timer 1
-	PR1 = 0x78E4;			// interrupt every (100ms: 0x3C72) 
-	T1CON = 0x8030;			// 1:256 prescale, start TMR1
-	IFS0bits.T1IF = 0;		// clr interrupt flag
-	IEC0bits.T1IE = 1;		// set interrupt enable bit
-*/	
+// Config Timer1. Enable interrupt
+
 
 	OpenTimer1(T1_ON & T1_IDLE_CON & T1_GATE_OFF & T1_PS_1_256 &
 	   T1_SYNC_EXT_OFF & T1_SOURCE_INT, 0x78E4);
    ConfigIntTimer1(T1_INT_ON);
 
-// Configurar SPI
+// Config SPI
 // PRI_PRESCAL_1_1 & SEC_PRESCAL_6_1 for ~6 MHz
    config1 = 0x0000;
    config1 = ENABLE_SCK_PIN & ENABLE_SDO_PIN & SPI_MODE16_OFF & 
@@ -160,21 +154,19 @@ int main(void)
    		   // Send command to the air node to request for GPS data.
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
    		   SPI_buffer[0] = GET_GPS_DATA;
-   		   SPI_ReadWriteAddr(W_TX_PAYLOAD, 0x00, SPI_buffer, 0x01, SPI_READ);
+   		   SPI_ReadWriteAddr(W_TX_PAYLOAD, 0x00, SPI_buffer, 0x01, SPI_WRITE);
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
    		   startRF_TXRX();   // Initiate RF transmission
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
 		}
 		
-		// Despues de recibir los datos del nRF24L01+ enviarlos a la PC
+		// After receiving data from nRF24L01+ send it to PC
 		if(SPI_status.status == 0 && UART_status.data != 0 && UART_status.status == 0 && sys_cmd == 0){
    		//LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
    		UARTbufferSend(SPI_buffer);
 		}
 		
-		//while(!U1STAbits.TRMT);	// Esperar a que se transmita el byte antes de leer el otro de la IMU
-		//U1TXREG = cmd;
 
 	}//while(1)
 
@@ -182,7 +174,7 @@ int main(void)
 }
 
 /**************************************************************************/
-// Funciones adicionales
+// Aditional functions
 /**************************************************************************/
 char UARTbufferSend(char* c_ptr)
 {
@@ -191,8 +183,8 @@ char UARTbufferSend(char* c_ptr)
       UART_status.status = 1; // Update to transmiting status
 	   memcpy(U1TX_buffer, c_ptr, USART_TX_BUFFER_SIZE);
 
-	   // Iniciar transmision de mensaje por el UART
-	   U1TX_byte_counter = 1;		// Inicializar valor de contador
+	   // Begin message transmission through UART
+	   U1TX_byte_counter = 1;		// Initialize counter
 	   U1TXREG = U1TX_buffer[0];
 	   IEC0bits.U1TXIE = 1; // Enable UART TX interrupt
 	   return 1;
@@ -229,7 +221,7 @@ char SPI_ReadWriteAddr(unsigned char cmd, unsigned char addr,
 
 
 /**************************************************************************/
-// Vectores de interrupcion
+// Interrupt vectors
 /**************************************************************************/
 void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 {
@@ -239,7 +231,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 
 void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 {
-	// Manejo de la interrupcion externa: RB7, PIN16
+	// External interrupt: RB7, PIN16
 	// nRF24L01+ has sended an interruption request, check if data is received from
 	// air node
 
@@ -248,7 +240,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
    while(SPI_status.status != 0 ); // Wait for SPI to be idle
 	SPI_ReadWriteAddr(R_REGISTER, CONFIG, SPI_buffer, 0x01, SPI_READ);
    
-   // Guardar el registro STATUS para verificar la fuente de interrupcion
+   // Save STATUS register to verify interrupt source
+   while(SPI_status.status != 0 ); // Wait for SPI to be idle
    n = SPI_status.data>>4; // Take the relevant bits only
    
    // Data ready RX FIFO. Asserted when new data arrives RX FIFO   
@@ -263,12 +256,16 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
    	// Read actual payload data
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
    	n_payload = SPI_buffer[0]; // Save payload width      
+      if(n_payload < 32){
    	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_payload, SPI_READ); 
-   	
    	// Send data to PC
    	while(SPI_status.status != 0 ); // Wait for SPI to be idle
    	UARTbufferSend(SPI_buffer);
-   	   	      
+   	}else{
+         // Flush RX
+         while(SPI_status.status != 0 ); // Wait for SPI to be idle
+         SPI_ReadWriteAddr(FLUSH_RX, 0x00, SPI_buffer, 0x01, SPI_WRITE); 
+      }
       //2) clear RX_DR IRQ,
       while(SPI_status.status != 0 ); // Wait for SPI to be idle
       SPI_buffer[0] = 0x40;   // Write STATUS_REG to clear interrupt sources
@@ -301,9 +298,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 
 void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
 {
-	// Aqui se transmite los datos por el puerto serial
+	// Transmit byte through serial port
 
-	
 	IFS0bits.U1TXIF = 0;	// Limpiar bandera de interrupcion
 	if(U1TX_byte_counter < USART_TX_BUFFER_SIZE)
 	{
