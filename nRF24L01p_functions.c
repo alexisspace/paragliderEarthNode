@@ -64,12 +64,14 @@ void nRF24L01p_PowerUp(void)
 
 void startRF_TXRX(void)
 {
+   unsigned char cnt;
    // Send 10 us pulse at CE_PIN 
    CE_PIN = 0x01;  // Assert the CE pin on nRF24L01+
-   IEC0bits.INT0IE = 1;		// Habilitar interrupcion externa
+   ConfigIntTimer1(T1_INT_OFF);   // Disable timer 1 interrupt
    WriteTimer1(0);
    do{
-      n = ReadTimer1();
-   }while(n < CE_PERIOD);
+      cnt = ReadTimer1();
+   }while(cnt < CE_PERIOD);
    CE_PIN = 0x00;  // Set low the CE pin on nRF24L01+
+   ConfigIntTimer1(T1_INT_ON);   // Enable timer 1 interrupt
 }

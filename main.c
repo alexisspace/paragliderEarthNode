@@ -22,8 +22,8 @@
 
 // Global variables 
 char SPI_buffer[SPI_BUFFER_SIZE], U1TX_buffer[USART_TX_BUFFER_SIZE], *SPI_buffer_ptr;
-unsigned char sys_cmd, U1TX_byte_counter, n;
-unsigned char SPI_byte_counter, SPI_max_bytes;
+unsigned char sys_cmd, U1TX_byte_counter, SPI_max_bytes, n;
+unsigned char SPI_byte_counter;
 
 
 volatile struct status UART_status = {0,0};// Estado del UART
@@ -90,8 +90,6 @@ int main(void)
 	IEC0bits.INT0IE = 1;		// Habilitar interrupcion
 
 // Config Timer1. Enable interrupt
-
-
 	OpenTimer1(T1_ON & T1_IDLE_CON & T1_GATE_OFF & T1_PS_1_256 &
 	   T1_SYNC_EXT_OFF & T1_SOURCE_INT, 0x78E4);
    ConfigIntTimer1(T1_INT_ON);
@@ -112,9 +110,8 @@ int main(void)
    OpenSPI1(config1, config2, config3);
    ConfigIntSPI1(SPI_INT_PRI_3 & SPI_INT_EN);   // Enable interrupt
    
-   CSN_PIN = 0x01;  // SS idle
-
-
+   CSN_PIN = 0x01;   // SS idle
+   CE_PIN = 0x00;    // No transmiting
 	while(1)
 	{
 		
@@ -155,7 +152,7 @@ int main(void)
    		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
    		   SPI_buffer[0] = GET_GPS_DATA;
    		   SPI_ReadWriteAddr(W_TX_PAYLOAD, 0x00, SPI_buffer, 0x01, SPI_WRITE);
-   		   while(SPI_status.status != 0 ); // Wait for SPI to be idle
+   		   while(SPI_status.status); // Wait for SPI to be idle
    		   startRF_TXRX();   // Initiate RF transmission
    		   sys_cmd = 0; // Reset the command as is already executed
    		break;
@@ -163,11 +160,78 @@ int main(void)
 		
 		// After receiving data from nRF24L01+ send it to PC
 		if(SPI_status.status == 0 && UART_status.data != 0 && UART_status.status == 0 && sys_cmd == 0){
-   		//LATBbits.LATB15 = !LATBbits.LATB15;		//Toggle LED (D4)
    		UARTbufferSend(SPI_buffer);
 		}
 		
-
+		// Check if nRF42L01+ has made an interruption request
+		if(SPI_status.cmd == 0xFF){
+   		// nRF42L01+ Interrupt request
+   		
+   		SPI_status.cmd = 0x00; // Clear command, as is being processed
+         while(SPI_status.status); // Wait for SPI to be idle
+      	SPI_ReadWriteAddr(W_REGISTER, NOP_CMD, SPI_buffer, 0x00, SPI_WRITE);
+      
+         // Save STATUS register to verify interrupt source
+         while(SPI_status.status); // Wait for SPI to be idle
+         n = SPI_status.data>>4; // Take the relevant bits only
+         n = n & 0x0F;
+         while(UART_status.status);
+         SPI_buffer[0] = n;
+         UARTbufferSend(SPI_buffer);
+         
+         // Data ready RX FIFO. Asserted when new data arrives RX FIFO   
+         if(n & 0x04){
+            //D6_PIN = !D6_PIN; // Toggle LED 5
+            //The RX_DR IRQ is asserted by a new packet arrival event. 
+            //The procedure for handling this interrupt should be: 
+            //1) read payload through SPI, 
+            // Read payload width
+            while(SPI_status.status != 0 ); // Wait for SPI to be idle
+         	SPI_ReadWriteAddr(R_RX_PL_WID, 0x00, SPI_buffer, 0x01, SPI_READ); 
+      
+         	// Read actual payload data
+            while(SPI_status.status != 0 ); // Wait for SPI to be idle
+         	n_bytes = SPI_buffer[0]; // Save payload width      
+            if(n_bytes < 32){
+         	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_bytes, SPI_READ); 
+         	// Send data to PC
+         	while(SPI_status.status); // Wait for SPI to be idle
+         	while(UART_status.status); // Wait for SPI to be idle
+         	UARTbufferSend(SPI_buffer);
+         	}else{
+               // Flush RX
+               while(SPI_status.status != 0 ); // Wait for SPI to be idle
+               SPI_ReadWriteAddr(FLUSH_RX, 0x00, SPI_buffer, 0x01, SPI_WRITE); 
+            }
+            //2) clear RX_DR IRQ,
+            while(SPI_status.status != 0 ); // Wait for SPI to be idle
+            SPI_buffer[0] = 0x40;   // Write STATUS_REG to clear interrupt sources
+         	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);
+         	       
+            //3) read FIFO_STATUS to check if there are more payloads available in RX FIFO, 
+            while(SPI_status.status != 0 ); // Wait for SPI to be idle
+         	SPI_ReadWriteAddr(R_REGISTER, FIFO_STATUS, SPI_buffer, 0x01, SPI_READ); // Read actual payload data      
+         	
+            //4) if there are more data in RX FIFO, repeat from step 1).      
+         }
+         
+         // Data Sent TX FIFO interrupt. Asserted when packet transmitted on TX. 
+         if(n & 0x02){
+            D6_PIN = !D6_PIN; // Toggle LED 5
+            while(SPI_status.status != 0 ); // Wait for SPI to be idle
+            SPI_buffer[0] = 0x20;   // Write STATUS_REG to clear interrupt sources
+         	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
+         }
+         
+         // Maximum number of TX retransmits interrupt
+         if(n & 0x01){
+            D5_PIN = !D5_PIN; // Toggle LED 5
+            while(SPI_status.status); // Wait for SPI to be idle
+            SPI_buffer[0] = 0x10;   // Write STATUS_REG to clear interrupt sources
+         	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
+         }
+		} // if(SPI_status.data == 0xFF)
+		
 	}//while(1)
 
 	return 0;
@@ -235,65 +299,9 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 	// nRF24L01+ has sended an interruption request, check if data is received from
 	// air node
 
-	unsigned char n_payload;
-	
-   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-	SPI_ReadWriteAddr(R_REGISTER, CONFIG, SPI_buffer, 0x01, SPI_READ);
-   
-   // Save STATUS register to verify interrupt source
-   while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   n = SPI_status.data>>4; // Take the relevant bits only
-   
-   // Data ready RX FIFO. Asserted when new data arrives RX FIFO   
-   if(n & 0x04){
-      //The RX_DR IRQ is asserted by a new packet arrival event. 
-      //The procedure for handling this interrupt should be: 
-      //1) read payload through SPI, 
-      // Read payload width
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	SPI_ReadWriteAddr(R_RX_PL_WID, 0x00, SPI_buffer, 0x01, SPI_READ); 
-
-   	// Read actual payload data
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	n_payload = SPI_buffer[0]; // Save payload width      
-      if(n_payload < 32){
-   	SPI_ReadWriteAddr(R_RX_PAYLOAD, 0x00, SPI_buffer, n_payload, SPI_READ); 
-   	// Send data to PC
-   	while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	UARTbufferSend(SPI_buffer);
-   	}else{
-         // Flush RX
-         while(SPI_status.status != 0 ); // Wait for SPI to be idle
-         SPI_ReadWriteAddr(FLUSH_RX, 0x00, SPI_buffer, 0x01, SPI_WRITE); 
-      }
-      //2) clear RX_DR IRQ,
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-      SPI_buffer[0] = 0x40;   // Write STATUS_REG to clear interrupt sources
-   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);
-   	       
-      //3) read FIFO_STATUS to check if there are more payloads available in RX FIFO, 
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-   	SPI_ReadWriteAddr(R_REGISTER, FIFO_STATUS, SPI_buffer, 0x01, SPI_READ); // Read actual payload data      
-   	
-      //4) if there are more data in RX FIFO, repeat from step 1).      
-   }
-   
-   // Data Sent TX FIFO interrupt. Asserted when packet transmitted on TX. 
-   if(n & 0x02){
-      D5_PIN = !D5_PIN; // Toggle LED 5
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-      SPI_buffer[0] = 0x20;   // Write STATUS_REG to clear interrupt sources
-   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
-   }
-   
-   // Maximum number of TX retransmits interrupt
-   if(n & 0x01){
-      while(SPI_status.status != 0 ); // Wait for SPI to be idle
-      SPI_buffer[0] = 0x10;   // Write STATUS_REG to clear interrupt sources
-   	SPI_ReadWriteAddr(W_REGISTER, STATUS_REG, SPI_buffer, 0x01, SPI_WRITE);      
-   }
-   
-	IFS0bits.INT0IF = 0;		// Clear flag
+   D7_PIN = !D7_PIN;
+   SPI_status.cmd = 0xFF; // interrupt request commad
+   IFS0bits.INT0IF = 0;		// Clear flag	
 }
 
 void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
@@ -303,7 +311,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
 	IFS0bits.U1TXIF = 0;	// Limpiar bandera de interrupcion
 	if(U1TX_byte_counter < USART_TX_BUFFER_SIZE)
 	{
-		LATBbits.LATB13 = !LATBbits.LATB13;		// Toggle LED (D6) 
 		U1TXREG = U1TX_buffer[U1TX_byte_counter];
 		U1TX_byte_counter++;
 	}
@@ -321,7 +328,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _U1TXInterrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _U1RXInterrupt(void)
 {
    _U1RXIF = 0;					// Clear UART RX Interrupt Flag
-	LATBbits.LATB12 = !LATBbits.LATB12;		// Toggle LED (D7)
    UART_status.data = U1RXREG;
    sys_cmd = UART_status.data;
 }

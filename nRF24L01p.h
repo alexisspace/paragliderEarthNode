@@ -3,6 +3,7 @@
 typedef struct status {
    char status;
    unsigned char data;
+   unsigned char cmd;
    } STATUS; // Se define el tipo "struct status"
 //typedef struct status STATUS; // Se abrevia STATUS
 
@@ -42,7 +43,7 @@ typedef struct status {
 #define R_RX_PL_WID  0b01100000
 #define W_ACK_PAYLOAD   0b10101000
 #define W_TX_PAYLOAD_NOACK 0b10110000
-#define NOP          0b11111111
+#define NOP_CMD          0b11111111
 
 // Pin assigments
 #define CSN_PIN LATBbits.LATB10
