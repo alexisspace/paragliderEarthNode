@@ -181,7 +181,7 @@ int main(void)
          
          // Data ready RX FIFO. Asserted when new data arrives RX FIFO   
          if(n & 0x04){
-            //D6_PIN = !D6_PIN; // Toggle LED 5
+            D7_PIN = !D7_PIN;
             //The RX_DR IRQ is asserted by a new packet arrival event. 
             //The procedure for handling this interrupt should be: 
             //1) read payload through SPI, 
@@ -299,7 +299,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _INT0Interrupt(void)
 	// nRF24L01+ has sended an interruption request, check if data is received from
 	// air node
 
-   D7_PIN = !D7_PIN;
+
    SPI_status.cmd = 0xFF; // interrupt request commad
    IFS0bits.INT0IF = 0;		// Clear flag	
 }
